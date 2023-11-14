@@ -4,7 +4,7 @@
  * @file      pwm-rockchip-capture.c
  * @brief     Rockchip RK3568 PWM Capture Mode Standard Usage Flow Driver.
  * @author    tzuhao.hu <tzuhao.hu@foxmail.com>
- * @date      2023/11/13
+ * @date      2023/11/14
  * 
  * This program is free software; you can redistribute  it and/or modify it
  * under  the terms of  the GNU General  Public License as published by the
@@ -149,7 +149,8 @@ static DEFINE_MUTEX(device_mutex);
 
 typedef enum _CAP_STATE {
 	CAP_IDLE,
-	CAP_JUNK_DATA,
+	CAP_JUNK_DATA_1, // lpr/hpr junk data
+	CAP_JUNK_DATA_2, // hpr/lpr junk data
 	CAP_DATA,
 	CAP_DONE,
 } eCAP_STATE;
@@ -172,10 +173,9 @@ struct rk_pwm_capture_drvdata {
     int pwm_channel; // RK3568 4-built-in PWM channels
     int hpr; // Number of capture clock cycles at high levels in a PWM cycle to be tested
 	int lpr; // Number of capture clock cycles at low levels in a PWM cycle to be tested
-    struct timer_list timer;
 	eCAP_STATE state;
-	spinlock_t lock; 
-
+	struct clk *clk;
+    struct clk *p_clk;
 	struct rk_pwm_capture_sysfs_data sdata;
 };
 
@@ -201,7 +201,7 @@ static void rk_pwm_capture_start(struct rk_pwm_capture_drvdata *ddata)
 {
 	ddata->hpr = 0;
 	ddata->lpr = 0;
-	ddata->state = CAP_JUNK_DATA;
+	ddata->state = CAP_JUNK_DATA_1;
 	
 	rk_pwm_capture_hw_enabled(ddata->base, ddata->pwm_channel);
 }
@@ -351,7 +351,10 @@ static irqreturn_t rk_pwm_capture_hw_irq(int irq, void *dev_id)
 	//spin_lock(&ddata->lock);
 	switch (ddata->state)
 	{
-	case CAP_JUNK_DATA:
+	case CAP_JUNK_DATA_1:
+		ddata->state = CAP_JUNK_DATA_2;
+		break;
+	case CAP_JUNK_DATA_2:
 		ddata->lpr = ddata->hpr = 0;
 		ddata->state = CAP_DATA;
 		break;
@@ -441,6 +444,48 @@ static int rk_pwm_capture_irq_init(struct platform_device *pdev)
 	return 0;
 }
 
+static int rk_pwm_capture_clk_init(struct platform_device *pdev)
+{
+	int ret;
+	int pwm_freq;
+	struct rk_pwm_capture_drvdata *ddata;
+
+	ddata = platform_get_drvdata(pdev);
+
+	ret = clk_prepare_enable(ddata->clk);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't enable bus clk: %d\n", ret);
+		return ret;
+	}
+	ret = clk_prepare_enable(ddata->p_clk);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't enable bus periph clk: %d\n", ret);
+		return ret;
+	}
+	pwm_freq = clk_get_rate(ddata->clk) / 64;
+	//dev_info(&pdev->dev,"pwm_freq: %d\n", pwm_freq);
+	ddata->pwm_freq_nstime = 1000000000 / pwm_freq;
+	//dev_info(&pdev->dev,"pwm_freq_nstime: %d\n", ddata->pwm_freq_nstime);
+
+	return 0;
+}
+
+static int rk_pwm_capture_clk_deinit(struct platform_device *pdev)
+{
+	struct rk_pwm_capture_drvdata *ddata;
+
+	ddata = platform_get_drvdata(pdev);	
+
+	if (ddata->p_clk) {
+		clk_unprepare(ddata->p_clk);
+	} 
+	if (ddata->clk) {
+		clk_unprepare(ddata->clk);
+	}
+
+	return 0;
+}
+
 static int rk_pwm_capture_sysfs_init(struct platform_device *pdev)
 {
 	int ret;
@@ -494,12 +539,9 @@ static int rk_pwm_capture_get_dts_property(struct platform_device *pdev)
 	struct clk *clk;
     struct clk *p_clk;
 	int pwm_channel;
-	int pwm_freq;
 	int ret;
 
 	ddata = platform_get_drvdata(pdev);
-
-	ddata->state = CAP_IDLE;
 
 	ret = of_device_is_available(np);
 	if (!ret) {
@@ -525,27 +567,23 @@ static int rk_pwm_capture_get_dts_property(struct platform_device *pdev)
 	ddata->irq_cpu_id = 1;
 
     clk = devm_clk_get(&pdev->dev, "pwm");
-    p_clk = devm_clk_get(&pdev->dev, "pclk");
     if (IS_ERR(clk)) {
 		ret = PTR_ERR(clk);
-		if (ret != -EPROBE_DEFER)
+		if (ret != -EPROBE_DEFER) {
 			dev_err(&pdev->dev, "Can't get bus clk: %d\n", ret);
+		}
 		return ret;
 	}
-    ret = clk_prepare_enable(clk);
-	if (ret) {
-		dev_err(&pdev->dev, "Can't enable bus clk: %d\n", ret);
+	ddata->clk = clk;
+	p_clk = devm_clk_get(&pdev->dev, "pclk");
+	if (IS_ERR(p_clk)) {
+		ret = PTR_ERR(p_clk);
+		if (ret != -EPROBE_DEFER) {
+			dev_err(&pdev->dev, "Can't get pclk: %d\n", ret);
+		}
 		return ret;
 	}
-	ret = clk_prepare_enable(p_clk);
-	if (ret) {
-		dev_err(&pdev->dev, "Can't enable bus periph clk: %d\n", ret);
-		return ret;
-	}
-	pwm_freq = clk_get_rate(clk) / 64;
-	//dev_info(&pdev->dev,"pwm_freq: %d\n", pwm_freq);
-	ddata->pwm_freq_nstime = 1000000000 / pwm_freq;
-	//dev_info(&pdev->dev,"pwm_freq_nstime: %d\n", ddata->pwm_freq_nstime);
+	ddata->p_clk = p_clk;
 
 	of_property_read_u32(np, "pwm_channel", &pwm_channel);
 	pwm_channel %= 4;
@@ -569,6 +607,8 @@ static int rk_pwm_capture_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to allocate memory\n");
 		return -ENOMEM;
 	}
+	ddata->base = ddata->clk = ddata->p_clk = NULL;
+	ddata->state = CAP_IDLE;
 	platform_set_drvdata(pdev, ddata);
 
 	if (0 != (ret = rk_pwm_capture_get_dts_property(pdev))) {
@@ -579,9 +619,16 @@ static int rk_pwm_capture_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	if (0 != (rk_pwm_capture_clk_init(pdev))) {
+		return ret;
+	}
+
     rk_pwm_capture_hw_init(ddata->base, ddata->pwm_channel); 
 
-	rk_pwm_capture_sysfs_init(pdev);
+	if (0 != (rk_pwm_capture_sysfs_init(pdev))) {
+		rk_pwm_capture_clk_deinit(pdev);
+		return ret;
+	}
 
 	dev_info(&pdev->dev, "probe successful!");
 
@@ -591,10 +638,12 @@ static int rk_pwm_capture_probe(struct platform_device *pdev)
 static int rk_pwm_capture_remove(struct platform_device *pdev)
 {
 	struct rk_pwm_capture_drvdata *ddata = platform_get_drvdata(pdev);
-    del_timer_sync(&ddata->timer);
 
 	rk_pwm_capture_sysfs_deinit(pdev);
 	rk_pwm_capture_hw_deinit(ddata->base, ddata->pwm_channel);
+	rk_pwm_capture_clk_deinit(pdev);
+
+	dev_info(&pdev->dev, "remove!");
 
 	return 0;
 }
