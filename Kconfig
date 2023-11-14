@@ -1,0 +1,5 @@
+config PWM_ROCKCHIP_CAPTURE
+        tristate "Rockchip PWM capture mode support"
+        depends on PWM_ROCKCHIP
+        help
+          Support Rockchip pwm capture mode.
