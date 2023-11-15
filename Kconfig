@@ -3,3 +3,9 @@ config PWM_ROCKCHIP_CAPTURE
         depends on PWM_ROCKCHIP
         help
           Support Rockchip pwm capture mode.
+
+config PWM_ROCKCHIP_CAPTURE_BOUNDARY
+        tristate "Rockchip PWM capture mode support configs"
+        depends on PWM_ROCKCHIP_CAPTURE
+        help
+          Support boundary value judgment in Rockchip pwm capture mode.

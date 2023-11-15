@@ -4,7 +4,7 @@
  * @file      pwm-rockchip-capture.c
  * @brief     Rockchip RK3568 PWM Capture Mode Standard Usage Flow Driver.
  * @author    tzuhao.hu <tzuhao.hu@foxmail.com>
- * @date      2023/11/14
+ * @date      2023/11/15
  * 
  * This program is free software; you can redistribute  it and/or modify it
  * under  the terms of  the GNU General  Public License as published by the
@@ -34,6 +34,9 @@
 #include <linux/delay.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+#include <linux/of_gpio.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/gpio/consumer.h>
 
 /* PWM0 registers  */
 #define PWM_REG_CNTR			0x00  /* Counter Register */
@@ -132,6 +135,10 @@ struct rk_pwm_capture_data_t {
 	u_int64_t period_ns;
 	u_int64_t duty_ns;
     u_int8_t capture_ms;
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+	bool full_duty;
+	bool zero_duty;
+#endif
 };
 
 enum pwm_div {
@@ -176,6 +183,10 @@ struct rk_pwm_capture_drvdata {
 	eCAP_STATE state;
 	struct clk *clk;
     struct clk *p_clk;
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+	int gpio_index;
+#endif
+
 	struct rk_pwm_capture_sysfs_data sdata;
 };
 
@@ -253,6 +264,26 @@ static int rk_pwm_capture_sysfs_release(struct inode * node, struct file *fp)
 	return 0;
 }
 
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+static bool rk_pwm_capture_is_boundary(int gpio_index, bool *full_duty, bool *zero_duty)
+{
+	int oldVal;
+	int i;
+	oldVal = gpio_get_value(gpio_index);
+
+	for (i = 0; i < 30; i++) {
+		if (gpio_get_value(gpio_index) != oldVal) {
+			return false; 
+		}
+		msleep(1);
+	}
+	*full_duty = (oldVal == 1);
+	*zero_duty = (oldVal == 0);
+
+	return true; 
+}
+#endif
+
 static ssize_t rk_pwm_capture_sysfs_read(struct file *fp, char __user * buf, size_t size, loff_t *lf)
 {
 	int ret;
@@ -264,11 +295,21 @@ static ssize_t rk_pwm_capture_sysfs_read(struct file *fp, char __user * buf, siz
 		size = 128;
 	}
 
+	ddata->sdata.user_data.duty_ns = ddata->sdata.user_data.period_ns = ddata->sdata.user_data.capture_ms = 0;
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+	ddata->sdata.user_data.full_duty = ddata->sdata.user_data.zero_duty = false;
+#endif
+
 	rk_pwm_capture_start(ddata);
 
 	do {
 		if (timeout >= 50) {
 			rk_pwm_capture_stop(ddata);
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+			if (rk_pwm_capture_is_boundary(ddata->gpio_index, &ddata->sdata.user_data.full_duty, &ddata->sdata.user_data.zero_duty)) {
+				break;
+			}
+#endif
 			ret = -EIO;
 			dev_err(&ddata->dev, "Failed to capture data: %d.\n", ret);
 			return ret;
@@ -592,6 +633,24 @@ static int rk_pwm_capture_get_dts_property(struct platform_device *pdev)
 		dev_err(&pdev->dev, "pwm id error\n");
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+	ddata->gpio_index = of_get_named_gpio(pdev->dev.of_node, "gpio-pin", 0);
+	ret = gpio_is_valid(ddata->gpio_index);
+	if (!ret) {
+    	dev_err(&pdev->dev, "gpio: %d is invalid\n", ddata->gpio_index);
+		return -EINVAL;
+    }
+
+	gpio_free(ddata->gpio_index);
+	ret = gpio_request(ddata->gpio_index, "gpio-pin");
+	if (ret) {
+        dev_err(&pdev->dev, "gpio %d request failed: %d\n", ddata->gpio_index, ret);
+		gpio_free(ddata->gpio_index);
+		return ret;
+    }
+	gpio_direction_input(ddata->gpio_index);
+#endif
 
 	return 0;
 }

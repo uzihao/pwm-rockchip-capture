@@ -20,6 +20,7 @@ pwm15: pwm@fe700030 {
 	clocks = <&cru CLK_PWM3>, <&cru PCLK_PWM3>;
 	clock-names = "pwm", "pclk";
 	pwm_channel = <3>;
+    gpio-pin = <&gpio3 RK_PC5 GPIO_ACTIVE_LOW>;
     status = "okay";
 };
 ```
@@ -33,6 +34,10 @@ struct rk_pwm_capture_data_t {
     u_int64_t period_ns;
     u_int64_t duty_ns;
     u_int8_t wait_time_ms;
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+    bool full_duty;
+    bool zero_duty;
+#endif
 };
 
 int main()
@@ -47,7 +52,9 @@ int main()
     memset(&data, '\0', sizeof(data));
     int readBytes = read(fd, &data, sizeof(data));
     printf("ReadBytes: %d; period; %d; duty: %d; wait_time: %d.\n\n", readBytes, data.period_ns, data.duty_ns, data.wait_time_ms);
-
+#ifdef CONFIG_PWM_ROCKCHIP_CAPTURE_BOUNDARY
+    printf("---------: full_duty: %d; zero_duty: %d\n", data.full_duty, data.zero_duty);
+#endif
     close(fd);
     return 0;
 }
