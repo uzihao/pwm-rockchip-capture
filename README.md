@@ -11,16 +11,16 @@ You'll need to add something like this in DTS file for your board
 ```bash
 pwm15: pwm@fe700030 {
     compatible = "rockchip,pwm-capture";
-	reg = <0x0 0xfe700030 0x0 0x10>;
-	interrupts = <GIC_SPI 85 IRQ_TYPE_LEVEL_HIGH>,
-			 <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>;
-	#pwm-cells = <3>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&pwm15m0_pins>;
-	clocks = <&cru CLK_PWM3>, <&cru PCLK_PWM3>;
-	clock-names = "pwm", "pclk";
-	pwm_channel = <3>;
-    gpio-pin = <&gpio3 RK_PC5 GPIO_ACTIVE_LOW>;
+    reg = <0x0 0xfe700030 0x0 0x10>;
+    interrupts = <GIC_SPI 85 IRQ_TYPE_LEVEL_HIGH>,
+                 <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>;
+    #pwm-cells = <3>;
+    pinctrl-names = "default";
+    pinctrl-0 = <&pwm15m0_pins>;
+    clocks = <&cru CLK_PWM3>, <&cru PCLK_PWM3>;
+    clock-names = "pwm", "pclk";
+    pwm_channel = <3>;
+    gpio-pin = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
     status = "okay";
 };
 ```
@@ -59,4 +59,3 @@ int main()
     return 0;
 }
 ```
-
